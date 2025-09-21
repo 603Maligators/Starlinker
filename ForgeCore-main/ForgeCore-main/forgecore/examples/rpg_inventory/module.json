@@ -1,0 +1,7 @@
+{
+  "name": "rpg_inventory",
+  "version": "1.0.0",
+  "provides": ["rpg.inventory@1.0"],
+  "requires": ["basic.service@^1.0"],
+  "entry": "entry:Module"
+}

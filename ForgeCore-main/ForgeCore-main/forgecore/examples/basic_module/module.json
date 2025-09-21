@@ -1,0 +1,6 @@
+{
+  "name": "basic_module",
+  "version": "1.0.0",
+  "provides": ["basic.service@1.0"],
+  "entry": "entry:Module"
+}
