@@ -82,9 +82,18 @@ theme = "neutral"  # options: neutral, uee, crusader, drake, rsi
 ```
 This schema aligns with the product requirements and will be backed by migrations so future releases can evolve defaults safely.
 
-## Next Steps (Preview)
-1. **Backend Skeleton**: Create the `starlinker_news` package with FastAPI router, config loader, SQLite connection, and placeholder scheduler hooks.
-2. **Electron Bootstrap**: Scaffold the Electron app (main + renderer) with a splash screen and health-check polling against the backend.
-3. **Settings CRUD**: Implement read/write endpoints and React forms using the schema above, ensuring validation primitives are in place before wiring advanced features.
+## Program Roadmap
+1. **Foundational Planning (today)** – Review the existing ForgeCore codebase, confirm tech stack versions, and identify any gaps. Define a high-level architecture diagram (Electron shell ↔ FastAPI backend ↔ scheduler/ingest modules ↔ SQLite). Decide on configuration format (likely TOML) and shared settings schema.
+2. **Backend Skeleton** – Add a `starlinker_news` package inside ForgeCore with a minimal FastAPI router (`/health` endpoint, config scaffolding, empty scheduler hook). Ensure the backend can load defaults, write/read from the settings table, and expose basic health info.
+3. **Electron Main Process MVP** – Create the Electron project with a barebones window, single-instance lock, and backend child-process launcher (hard-coded port initially). Show a placeholder splash screen until the backend responds to `/health`.
+4. **Renderer Shell** – Set up React + Tailwind with routing, global state (e.g., Zustand/Redux), and a placeholder dashboard page that pings `/health`.
+5. **Config & Settings API** – Flesh out settings CRUD endpoints in FastAPI, backed by SQLite. Wire the renderer to load/save settings, with validation scaffolding.
+6. **Startup Wizard (Frontend)** – Implement the multi-step flow with mocked saves. Persist “incomplete” flags to drive badges in the Admin UI.
+7. **Scheduler & Ingest Modules** – Add the scheduler loop (APScheduler/async tasks). Implement one ingest module end-to-end (e.g., RSI Patch Notes) to validate the pipeline (fetch → normalize → store). Gradually add the remaining sources.
+8. **Alerts & Digest Engine** – Build the tagging/priority system, dedupe logic, quiet hours checks. Implement alert dispatchers (Discord webhook, email placeholder). Create the daily/weekly digest generator and preview API.
+9. **Renderer Admin Tabs** – Iterate tab-by-tab (Connections, Sources, Schedule, Alerts, Digest, Reddit, Advanced, Health & Logs, Appearance), wiring to real APIs and validations. Add toast/error handling, red badges for missing prerequisites.
+10. **Tray & Autostart Features** – Implement the tray menu actions (Open Dashboard, Run Poll Now, Snooze Alerts, Quit). Add optional Windows auto-launch toggle.
+11. **Packaging** – Configure electron-builder for portable `.exe` and installer. Include resource assets (Fankit + neutral themes), About dialog, LICENSE placement. Add code-signing hook stub.
+12. **Docs & Tests** – Write README, FIRST_RUN, PACKAGING, CHANGELOG. Add targeted unit tests (ingest normalizers, scheduler timing, settings API) and renderer-level tests where feasible.
 
 These artifacts set the baseline so subsequent steps can focus on iterative feature delivery without architectural rework.
