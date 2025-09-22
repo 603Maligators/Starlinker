@@ -22,8 +22,8 @@ implementing the heavy lifting.
 
 ## Next up
 
-- Flesh out the scheduler loop (priority vs. standard cadence) and connect real
-  ingest modules for the official RSI sources.
+- Connect real ingest modules for the official RSI sources and plug them into
+  the scheduler's timed triggers.
 - Expand the API with settings CRUD granularity, OAuth handshakes, and preview
   endpoints required by the Startup Wizard/Admin UI.
 - Begin wiring the Electron main process to spawn this FastAPI backend and read
