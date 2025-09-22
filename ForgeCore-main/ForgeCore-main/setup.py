@@ -8,9 +8,9 @@ setup(
         "packaging>=21.0",
         "click>=8.0.0",
         "watchdog>=2.0.0",
-        "fastapi>=0.95.0",
+        "fastapi>=0.103.0",
         "uvicorn>=0.21.0",
-        "pydantic>=1.10.0",
+        "pydantic>=2.0",
         "httpx>=0.24.1",
     ],
     extras_require={
