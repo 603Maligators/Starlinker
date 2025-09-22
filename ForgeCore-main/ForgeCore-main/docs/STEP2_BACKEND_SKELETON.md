@@ -9,8 +9,9 @@ implementing the heavy lifting.
 
 - Added the `forgecore.starlinker_news` package with SQLite-backed persistence,
   pydantic configuration models, and a FastAPI application factory.
-- Implemented a lightweight scheduler service that tracks manual poll/digest
-  triggers so the renderer can surface operational health immediately.
+- Implemented a scheduler service with background timers that drive
+  timezone-aware digests, surface detailed health reporting, and extend the
+  manual trigger tracking with new regression tests.
 - Exposed `/health`, `/settings`, `/run/poll`, `/run/digest`, and
   `/appearance/themes` endpoints via FastAPI, providing the minimum contract the
   forthcoming Electron shell and Admin UI can build against.
