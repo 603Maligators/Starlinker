@@ -1,5 +1,6 @@
 const { app, BrowserWindow, dialog } = require('electron');
 const { spawn } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
 const BACKEND_PORT = parseInt(process.env.STARLINKER_BACKEND_PORT || '8777', 10);
@@ -85,6 +86,29 @@ function createSplashWindow() {
   return window;
 }
 
+function buildRendererUrl(startUrl) {
+  try {
+    const url = new URL(startUrl);
+    url.searchParams.set('backend', HEALTH_URL);
+    return url.toString();
+  } catch (error) {
+    console.warn('Failed to construct renderer URL from ELECTRON_START_URL, falling back to raw value.', error);
+    return `${startUrl}?backend=${encodeURIComponent(HEALTH_URL)}`;
+  }
+}
+
+function resolveRendererEntryFile() {
+  const rendererDist = path.join(__dirname, '..', 'renderer', 'dist', 'index.html');
+  if (fs.existsSync(rendererDist)) {
+    return rendererDist;
+  }
+  console.warn(
+    'Renderer bundle not found at %s. Falling back to placeholder HTML. Run "npm run renderer:build" to generate the React shell.',
+    rendererDist,
+  );
+  return path.join(assetsDir, 'index.html');
+}
+
 function createMainWindow() {
   const window = new BrowserWindow({
     width: 1100,
@@ -100,9 +124,10 @@ function createMainWindow() {
 
   const startUrl = process.env.ELECTRON_START_URL;
   if (startUrl) {
-    window.loadURL(startUrl);
+    window.loadURL(buildRendererUrl(startUrl));
   } else {
-    window.loadFile(path.join(assetsDir, 'index.html'), {
+    const rendererEntry = resolveRendererEntryFile();
+    window.loadFile(rendererEntry, {
       query: {
         backend: HEALTH_URL,
       },

@@ -1,0 +1,14 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-950 font-sans text-slate-100;
+  }
+
+  code,
+  pre {
+    @apply font-mono;
+  }
+}
