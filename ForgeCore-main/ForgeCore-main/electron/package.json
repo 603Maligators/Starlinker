@@ -1,0 +1,17 @@
+{
+  "name": "starlinker-electron-shell",
+  "version": "0.1.0",
+  "description": "Electron main process MVP for the Starlinker desktop shell.",
+  "main": "src/main.js",
+  "author": "Starlinker",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "start:dev": "ELECTRON_START_URL=http://localhost:3000 electron ."
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "^28.2.0"
+  },
+  "private": true
+}

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Starlinker Shell</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+        background: #0b1120;
+        color: #e2e8f0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      main {
+        text-align: left;
+        max-width: 640px;
+        width: 90%;
+        padding: 40px;
+        box-sizing: border-box;
+        background: rgba(15, 23, 42, 0.72);
+        border-radius: 16px;
+        box-shadow: 0 20px 45px rgba(2, 6, 23, 0.45);
+      }
+      h1 {
+        font-size: 30px;
+        margin-bottom: 12px;
+      }
+      p {
+        font-size: 16px;
+        line-height: 1.6;
+        opacity: 0.82;
+      }
+      code {
+        background: rgba(148, 163, 184, 0.16);
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
+      }
+      pre {
+        margin-top: 20px;
+        padding: 16px;
+        background: rgba(30, 41, 59, 0.9);
+        border-radius: 12px;
+        overflow-x: auto;
+        font-family: "JetBrains Mono", Consolas, "Courier New", monospace;
+        font-size: 13px;
+        line-height: 1.55;
+      }
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 16px;
+      }
+      .status-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #38bdf8;
+        box-shadow: 0 0 12px rgba(56, 189, 248, 0.75);
+      }
+      .status[data-state="error"] .status-dot {
+        background: #f87171;
+        box-shadow: 0 0 12px rgba(248, 113, 113, 0.75);
+      }
+  </style>
+  </head>
+  <body>
+    <main>
+      <h1>Starlinker Desktop Shell</h1>
+      <p>
+        The Starlinker backend is running and this shell will hand off to the React
+        Admin UI in the upcoming steps. Until then, the panel below displays the
+        response from <code>/health</code> so you can verify scheduler and storage
+        state while developing the backend.
+      </p>
+      <div class="status" id="status" data-state="checking">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="status-text">Checking backend health…</span>
+      </div>
+      <pre id="health">Waiting for response…</pre>
+    </main>
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const healthUrl = params.get('backend');
+      const statusEl = document.getElementById('status');
+      const statusText = document.getElementById('status-text');
+      const healthOutput = document.getElementById('health');
+
+      async function loadHealth() {
+        if (!healthUrl) {
+          statusEl.dataset.state = 'error';
+          statusText.textContent = 'No backend URL was provided to the renderer.';
+          healthOutput.textContent = 'Expected a `backend` query parameter when loading index.html.';
+          return;
+        }
+
+        try {
+          const response = await fetch(healthUrl);
+          if (!response.ok) {
+            throw new Error(`Unexpected status ${response.status}`);
+          }
+          const payload = await response.json();
+          statusEl.dataset.state = 'ready';
+          statusText.textContent = 'Backend responded successfully.';
+          healthOutput.textContent = JSON.stringify(payload, null, 2);
+        } catch (error) {
+          statusEl.dataset.state = 'error';
+          statusText.textContent = 'Failed to retrieve backend health.';
+          healthOutput.textContent = String(error);
+        }
+      }
+
+      loadHealth();
+    </script>
+  </body>
+</html>
