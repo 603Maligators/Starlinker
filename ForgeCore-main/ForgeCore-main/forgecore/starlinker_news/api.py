@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -31,15 +32,15 @@ def create_app(
         target = Path(data_dir) if data_dir else Path.cwd() / "starlinker_data"
         backend = StarlinkerBackend(target)
 
-    app = FastAPI(title="Starlinker News Backend", version="0.1.0")
-
-    @app.on_event("startup")
-    async def _startup() -> None:  # pragma: no cover - FastAPI lifecycle wrapper
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):  # pragma: no cover - FastAPI lifecycle wrapper
         backend.scheduler.start()
+        try:
+            yield
+        finally:
+            backend.scheduler.stop()
 
-    @app.on_event("shutdown")
-    async def _shutdown() -> None:  # pragma: no cover - FastAPI lifecycle wrapper
-        backend.scheduler.stop()
+    app = FastAPI(title="Starlinker News Backend", version="0.1.0", lifespan=lifespan)
 
     @app.get("/health")
     async def get_health() -> dict:
