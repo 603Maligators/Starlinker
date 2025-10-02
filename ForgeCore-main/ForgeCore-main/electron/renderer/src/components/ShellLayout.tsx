@@ -1,12 +1,27 @@
+import { ReactNode, useMemo } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { ReactNode } from 'react';
+import { useWizardStore, WIZARD_STEP_ORDER } from '../state/wizardStore';
 
 const NAV_LINKS = [
   { path: '/dashboard', label: 'Dashboard' },
-];
+  { path: '/setup', label: 'Setup Wizard', showIncompleteBadge: true },
+] as const;
 
 export function ShellLayout({ children }: { children: ReactNode }) {
   const { pathname } = useLocation();
+  const wizardIncompleteCount = useWizardStore((state) =>
+    WIZARD_STEP_ORDER.reduce((count, step) => (state.incomplete[step] ? count + 1 : count), 0),
+  );
+  const wizardBadge = useMemo(() => {
+    if (wizardIncompleteCount <= 0) {
+      return null;
+    }
+    return (
+      <span className="ml-auto inline-flex h-5 min-w-[1.5rem] items-center justify-center rounded-full bg-rose-500/20 px-2 text-xs font-semibold text-rose-200">
+        {wizardIncompleteCount}
+      </span>
+    );
+  }, [wizardIncompleteCount]);
 
   return (
     <div className="flex min-h-screen flex-col lg:flex-row">
@@ -27,7 +42,8 @@ export function ShellLayout({ children }: { children: ReactNode }) {
                     : 'text-slate-300 hover:bg-slate-800/80 hover:text-slate-100'
                 }`}
               >
-                {link.label}
+                <span>{link.label}</span>
+                {link.showIncompleteBadge ? wizardBadge : null}
               </Link>
             );
           })}
