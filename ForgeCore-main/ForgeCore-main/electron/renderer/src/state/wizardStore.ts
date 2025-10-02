@@ -152,7 +152,7 @@ const INITIAL_INCOMPLETE: IncompleteMap = {
   digest: true,
 };
 
-interface WizardState {
+export interface WizardState {
   currentStep: WizardStepId;
   steps: WizardStepsState;
   incomplete: IncompleteMap;
@@ -275,23 +275,46 @@ export const useWizardStore = create<WizardState>()(
           },
         }));
 
-        await new Promise((resolve) => setTimeout(resolve, 800));
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 800));
 
-        const now = new Date().toISOString();
-        set((state) => ({
-          steps: {
-            ...state.steps,
-            [step]: {
-              ...state.steps[step],
-              status: 'complete',
-              lastSaved: now,
+          const now = new Date().toISOString();
+          set((state) => ({
+            steps: {
+              ...state.steps,
+              [step]: {
+                ...state.steps[step],
+                status: 'complete',
+                lastSaved: now,
+              },
             },
-          },
-          incomplete: {
-            ...state.incomplete,
-            [step]: false,
-          },
-        }));
+            incomplete: {
+              ...state.incomplete,
+              [step]: false,
+            },
+          }));
+        } finally {
+          set((state) => {
+            const stepState = state.steps[step];
+            if (stepState.status !== 'saving') {
+              return {} as Partial<WizardState>;
+            }
+
+            return {
+              steps: {
+                ...state.steps,
+                [step]: {
+                  ...stepState,
+                  status: 'editing',
+                },
+              },
+              incomplete: {
+                ...state.incomplete,
+                [step]: true,
+              },
+            };
+          });
+        }
       },
     }),
     {
@@ -301,30 +324,46 @@ export const useWizardStore = create<WizardState>()(
         steps: state.steps,
         incomplete: state.incomplete,
       }),
-      merge: (persisted, current) => {
-        const data = persisted as Partial<WizardState> | undefined;
-        if (!data) {
-          return current;
-        }
-        const restoredSteps: WizardStepsState = {
-          ...INITIAL_STEPS_STATE,
-          ...(data.steps ?? {}),
-        } as WizardStepsState;
-        const restoredIncomplete: IncompleteMap = {
-          ...INITIAL_INCOMPLETE,
-          ...(data.incomplete ?? {}),
-        } as IncompleteMap;
-
-        return {
-          ...current,
-          ...data,
-          steps: restoredSteps,
-          incomplete: restoredIncomplete,
-        };
-      },
+      merge: (persisted, current) => mergeWizardState(persisted as Partial<WizardState> | undefined, current),
     },
   ),
 );
+
+export function mergeWizardState(
+  data: Partial<WizardState> | undefined,
+  current: WizardState,
+): WizardState {
+  if (!data) {
+    return current;
+  }
+
+  const restoredSteps: WizardStepsState = {
+    ...INITIAL_STEPS_STATE,
+    ...(data.steps ?? {}),
+  } as WizardStepsState;
+  const restoredIncomplete: IncompleteMap = {
+    ...INITIAL_INCOMPLETE,
+    ...(data.incomplete ?? {}),
+  } as IncompleteMap;
+
+  for (const step of WIZARD_STEP_ORDER) {
+    const restoredStep = restoredSteps[step];
+    if (restoredStep?.status === 'saving') {
+      restoredSteps[step] = {
+        ...restoredStep,
+        status: 'editing',
+      };
+      restoredIncomplete[step] = true;
+    }
+  }
+
+  return {
+    ...current,
+    ...data,
+    steps: restoredSteps,
+    incomplete: restoredIncomplete,
+  };
+}
 
 export function getStepDefinition(step: WizardStepId): WizardStepDefinition {
   return WIZARD_STEPS.find((entry) => entry.id === step) ?? WIZARD_STEPS[0];
