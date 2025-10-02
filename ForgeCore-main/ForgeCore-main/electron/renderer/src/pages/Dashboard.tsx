@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../state/appStore';
 import { getApiBaseUrl } from '../lib/getApiBaseUrl';
 import { formatIsoTimestamp } from '../lib/formatIsoTimestamp';
 import { SettingsEditor } from '../components/SettingsEditor';
+import { useWizardStore, WIZARD_STEP_ORDER, WIZARD_STEPS } from '../state/wizardStore';
 
 type HealthResponse = {
   status?: string;
@@ -13,8 +15,33 @@ export function Dashboard() {
   const backendHealth = useAppStore((state) => state.backendHealth);
   const setBackendHealth = useAppStore((state) => state.setBackendHealth);
   const updateBackendHealth = useAppStore((state) => state.updateBackendHealth);
+  const navigate = useNavigate();
+  const startWizard = useWizardStore((state) => state.startWizard);
+  const incompleteSteps = useWizardStore((state) =>
+    WIZARD_STEP_ORDER.filter((step) => state.incomplete[step]),
+  );
+  const stepStates = useWizardStore((state) => state.steps);
   const [isChecking, setIsChecking] = useState(false);
   const apiBase = useMemo(() => getApiBaseUrl(), []);
+
+  const completedCount = useMemo(() => WIZARD_STEP_ORDER.length - incompleteSteps.length, [incompleteSteps.length]);
+  const totalSteps = WIZARD_STEP_ORDER.length;
+  const percentComplete = useMemo(
+    () => Math.round((completedCount / totalSteps) * 100),
+    [completedCount, totalSteps],
+  );
+  const nextStepDefinition = useMemo(() => {
+    if (incompleteSteps.length === 0) {
+      return undefined;
+    }
+    const next = incompleteSteps[0];
+    return WIZARD_STEPS.find((entry) => entry.id === next);
+  }, [incompleteSteps]);
+
+  const handleResumeWizard = () => {
+    startWizard(incompleteSteps[0]);
+    navigate('/setup');
+  };
 
   const runHealthCheck = useCallback(async () => {
     setIsChecking(true);
@@ -69,6 +96,64 @@ export function Dashboard() {
           Monitor the Starlinker backend status and confirm connectivity from the renderer shell.
         </p>
       </header>
+
+      <article className="rounded-xl border border-slate-800/70 bg-slate-900/40 p-5 shadow-lg shadow-slate-950/40">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="space-y-2">
+            <h2 className="text-lg font-medium text-slate-100">Startup Wizard Progress</h2>
+            <p className="text-sm text-slate-400">
+              {incompleteSteps.length === 0
+                ? 'All setup steps are saved. You are ready to configure advanced modules.'
+                : nextStepDefinition
+                ? `Next up: ${nextStepDefinition.title}. ${nextStepDefinition.description}`
+                : 'Resume the guided setup to finish wiring Starlinker defaults.'}
+            </p>
+            <div className="h-2 w-full overflow-hidden rounded-full bg-slate-800/80">
+              <div
+                className="h-full rounded-full bg-brand-500 transition-all"
+                style={{ width: `${percentComplete}%` }}
+              />
+            </div>
+            <p className="text-xs text-slate-500">
+              {completedCount} of {totalSteps} steps completed ({percentComplete}%).
+            </p>
+          </div>
+
+          <div className="flex w-full flex-col gap-3 lg:w-72">
+            <button
+              type="button"
+              onClick={handleResumeWizard}
+              className="inline-flex items-center justify-center rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-slate-700"
+              disabled={incompleteSteps.length === 0}
+            >
+              {incompleteSteps.length === 0 ? 'Setup Complete' : 'Resume Guided Setup'}
+            </button>
+            <div className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3 text-xs text-slate-400">
+              <p className="font-semibold text-slate-200">Step Status</p>
+              <ul className="mt-2 space-y-1">
+                {WIZARD_STEP_ORDER.map((step) => {
+                  const state = stepStates[step];
+                  const definition = WIZARD_STEPS.find((entry) => entry.id === step);
+                  const label = definition ? definition.title : step;
+                  const status = state.status === 'complete' && !incompleteSteps.includes(step)
+                    ? 'Complete'
+                    : state.status === 'saving'
+                    ? 'Saving…'
+                    : state.status === 'editing'
+                    ? 'Unsaved edits'
+                    : 'Incomplete';
+                  return (
+                    <li key={step} className="flex justify-between">
+                      <span>{label}</span>
+                      <span className="text-slate-300">{status}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          </div>
+        </div>
+      </article>
 
       <section className="grid gap-4 md:grid-cols-2">
         <article className="rounded-xl border border-slate-800/70 bg-slate-900/40 p-5 shadow-lg shadow-slate-950/40">
