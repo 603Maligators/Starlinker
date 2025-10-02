@@ -1,18 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAppStore } from '../state/appStore';
 import { getApiBaseUrl } from '../lib/getApiBaseUrl';
+import { formatIsoTimestamp } from '../lib/formatIsoTimestamp';
+import { SettingsEditor } from '../components/SettingsEditor';
 
 type HealthResponse = {
   status?: string;
   version?: string;
-};
-
-const formatTimestamp = (iso?: string) => {
-  if (!iso) {
-    return 'Never';
-  }
-  const date = new Date(iso);
-  return date.toLocaleString();
 };
 
 export function Dashboard() {
@@ -104,7 +98,7 @@ export function Dashboard() {
           <dl className="mt-4 space-y-3 text-sm text-slate-300">
             <div className="flex justify-between">
               <dt className="text-slate-400">Last Checked</dt>
-              <dd className="font-medium text-slate-100">{formatTimestamp(backendHealth.lastChecked)}</dd>
+              <dd className="font-medium text-slate-100">{formatIsoTimestamp(backendHealth.lastChecked)}</dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-slate-400">Message</dt>
@@ -132,27 +126,7 @@ export function Dashboard() {
           </button>
         </article>
 
-        <article className="rounded-xl border border-slate-800/70 bg-slate-900/40 p-5 shadow-lg shadow-slate-950/40">
-          <h2 className="text-lg font-medium text-slate-100">Next Steps</h2>
-          <p className="mt-3 text-sm text-slate-400">
-            This dashboard shell is wired to the FastAPI backend. Upcoming milestones will flesh out settings
-            management, ingest scheduling, and alerting workflows.
-          </p>
-          <ul className="mt-4 space-y-2 text-sm text-slate-300">
-            <li className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-brand-500" aria-hidden="true" />
-              Configure shared settings surface
-            </li>
-            <li className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-brand-500" aria-hidden="true" />
-              Implement scheduler insights and ingest stats
-            </li>
-            <li className="flex items-center gap-2">
-              <span className="h-2 w-2 rounded-full bg-brand-500" aria-hidden="true" />
-              Add alerting, digest, and connection management tabs
-            </li>
-          </ul>
-        </article>
+        <SettingsEditor />
       </section>
     </div>
   );
