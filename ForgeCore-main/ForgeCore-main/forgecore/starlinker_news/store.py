@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -155,6 +156,19 @@ class SettingsRepository:
         self.database.put_setting(self.SETTINGS_KEY, payload)
         return config
 
+    def default_config(self) -> StarlinkerConfig:
+        return StarlinkerConfig()
+
+    def config_schema(self) -> Dict[str, Any]:
+        return StarlinkerConfig.model_json_schema()
+
+    def apply_patch(self, patch: Mapping[str, Any]) -> StarlinkerConfig:
+        current = self.load().model_dump()
+        merged = self._merge_dict(current, patch)
+        config = StarlinkerConfig.model_validate(merged)
+        self.save(config)
+        return config
+
     def missing_prerequisites(self, config: Optional[StarlinkerConfig] = None) -> list[str]:
         cfg = config or self.load()
         missing: list[str] = []
@@ -166,3 +180,16 @@ class SettingsRepository:
 
     def export_raw(self) -> Dict[str, Any]:
         return self.database.list_settings()
+
+    def _merge_dict(self, base: Dict[str, Any], patch: Mapping[str, Any]) -> Dict[str, Any]:
+        result: Dict[str, Any] = dict(base)
+        for key, value in patch.items():
+            if (
+                isinstance(value, Mapping)
+                and key in result
+                and isinstance(result[key], dict)
+            ):
+                result[key] = self._merge_dict(result[key], value)
+            else:
+                result[key] = value
+        return result
