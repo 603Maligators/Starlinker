@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import FastAPI
-from pydantic import BaseModel, Field
+from fastapi import Body, FastAPI, HTTPException
+from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel, Field, ValidationError
 
 from .backend import StarlinkerBackend
 from .config import THEME_SLUGS, StarlinkerConfig
@@ -60,6 +61,23 @@ def create_app(
     @app.put("/settings", response_model=StarlinkerConfig)
     async def put_settings(config: StarlinkerConfig) -> StarlinkerConfig:
         return backend.update_config(config)
+
+    @app.patch("/settings", response_model=StarlinkerConfig)
+    async def patch_settings(payload: dict[str, Any] = Body(...)) -> StarlinkerConfig:
+        try:
+            return backend.patch_config(payload)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422, detail=jsonable_encoder(exc.errors())
+            ) from exc
+
+    @app.get("/settings/defaults", response_model=StarlinkerConfig)
+    async def get_default_settings() -> StarlinkerConfig:
+        return backend.default_config()
+
+    @app.get("/settings/schema")
+    async def get_settings_schema() -> dict[str, Any]:
+        return backend.config_schema()
 
     @app.post("/run/poll")
     async def run_poll(request: PollRequest) -> dict:

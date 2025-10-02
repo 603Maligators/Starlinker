@@ -6,6 +6,9 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from collections.abc import Mapping
+from typing import Any
+
 from .config import StarlinkerConfig
 from .scheduler import HealthStatus, SchedulerService
 from .store import SettingsRepository, StarlinkerDatabase
@@ -42,6 +45,17 @@ class StarlinkerBackend:
         stored = self.settings.save(config)
         self.scheduler.refresh_config(stored)
         return stored
+
+    def patch_config(self, patch: Mapping[str, Any]) -> StarlinkerConfig:
+        stored = self.settings.apply_patch(patch)
+        self.scheduler.refresh_config(stored)
+        return stored
+
+    def default_config(self) -> StarlinkerConfig:
+        return self.settings.default_config()
+
+    def config_schema(self) -> dict[str, object]:
+        return self.settings.config_schema()
 
     def missing_prerequisites(self, config: Optional[StarlinkerConfig] = None) -> list[str]:
         cfg = config or self.settings.load()
