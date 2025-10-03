@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional
 
 from .config import StarlinkerConfig
 
@@ -63,7 +63,14 @@ CREATE_STATEMENTS: Iterable[str] = (
         details_json TEXT
     )
     """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_signals_url
+    ON signals(url)
+    """,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard
+    from .ingest.models import NormalizedSignal
 
 
 @dataclass
@@ -132,6 +139,62 @@ class StarlinkerDatabase:
             "counts": counts,
             "last_error": dict(error_row) if error_row else None,
         }
+
+    def store_signals(self, signals: Iterable["NormalizedSignal"]) -> int:
+        from .ingest.models import NormalizedSignal  # local import to avoid cycle
+
+        rows = [signal.to_row() for signal in signals if isinstance(signal, NormalizedSignal)]
+        if not rows:
+            return 0
+        inserted = 0
+        with self.connect() as conn:
+            for row in rows:
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO signals(
+                            source, title, url, published_at, fetched_at,
+                            raw_excerpt, summary, tags_json, priority
+                        )
+                        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            row["source"],
+                            row["title"],
+                            row["url"],
+                            row["published_at"],
+                            row["fetched_at"],
+                            row.get("raw_excerpt"),
+                            row.get("summary"),
+                            row.get("tags_json"),
+                            row.get("priority", 0),
+                        ),
+                    )
+                except sqlite3.IntegrityError:
+                    continue
+                else:
+                    inserted += 1
+            conn.commit()
+        return inserted
+
+    def record_error(
+        self,
+        module: str,
+        message: str,
+        *,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        payload = json.dumps(details) if details is not None else None
+        now = datetime.now(timezone.utc).isoformat()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO errors(ts, module, message, details_json)
+                VALUES(?, ?, ?, ?)
+                """,
+                (now, module, message, payload),
+            )
+            conn.commit()
 
 
 class SettingsRepository:
