@@ -1,0 +1,6 @@
+Starlinker Shell
+================
+
+This software is distributed under the terms of the MIT License. A full copy of
+the license is installed alongside the application as `LICENSE.txt` and is also
+available at https://opensource.org/licenses/MIT.
