@@ -1108,14 +1108,18 @@ function AppearanceTab({ config, disabled, onSave, validationIssues }: TabProps)
   }, []);
 
   const handleThemeChange = async (value: string) => {
+    const previous = selected;
     setSelected(value);
-    await onSave(
+    const success = await onSave(
       { appearance: { theme: value } },
       {
         success: 'Theme updated',
         error: 'Failed to update theme',
       },
     );
+    if (!success) {
+      setSelected(previous);
+    }
   };
 
   const handleAutoLaunchToggle = async () => {
