@@ -18,6 +18,7 @@ def test_health_endpoint_reports_defaults(tmp_path):
     assert payload["status"] == "ok"
     assert payload["config"]["timezone"] == "America/New_York"
     assert payload["scheduler"]["running"] is True
+    assert payload["alerts"]["snoozed_until"] is None
 
 
 def test_poll_endpoint_updates_health(tmp_path):
@@ -105,3 +106,16 @@ def test_digest_preview_endpoint_returns_markdown(tmp_path):
     assert response.status_code == 200
     assert payload["digest"] == "daily"
     assert "Patch" in payload["body"]
+
+
+def test_alerts_can_be_snoozed(tmp_path):
+    backend = StarlinkerBackend(tmp_path)
+    app = create_app(backend=backend)
+    with TestClient(app) as client:
+        response = client.post("/alerts/snooze", json={"minutes": 45})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["snoozed_until"] is not None
+        health = client.get("/health").json()
+
+    assert health["alerts"]["snoozed_until"] == payload["snoozed_until"]

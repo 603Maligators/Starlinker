@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo } from 'react';
 import { formatIsoTimestamp } from '../lib/formatIsoTimestamp';
 import { useSettingsStore } from '../state/settingsStore';
+import { useToastStore } from '../state/toastStore';
 
 const STATUS_LABELS: Record<string, string> = {
   idle: 'Idle',
@@ -31,6 +32,7 @@ export function SettingsEditor() {
   const loadSettings = useSettingsStore((state) => state.loadSettings);
   const saveDraft = useSettingsStore((state) => state.saveDraft);
   const hasDefaults = useSettingsStore((state) => state.defaults !== null);
+  const pushToast = useToastStore((state) => state.push);
 
   useEffect(() => {
     if (status === 'idle') {
@@ -40,7 +42,12 @@ export function SettingsEditor() {
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    await saveDraft();
+    const success = await saveDraft();
+    if (success) {
+      pushToast({ tone: 'success', title: 'Settings saved' });
+    } else {
+      pushToast({ tone: 'error', title: 'Failed to save settings', description: 'Review the validation errors below.' });
+    }
   };
 
   const statusBadge = useMemo(() => {
