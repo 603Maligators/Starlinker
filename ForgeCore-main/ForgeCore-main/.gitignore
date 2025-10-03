@@ -9,6 +9,8 @@ node_modules/
 *.log
 .eggs/
 build/
+!electron/build/
+!electron/build/**
 dist/
 .vscode/
 .idea/

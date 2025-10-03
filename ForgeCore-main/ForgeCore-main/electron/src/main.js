@@ -14,6 +14,7 @@ let pendingSplashMessage = 'Initializing…';
 let backendProcess;
 let backendReady = false;
 let tray;
+let aboutWindow;
 
 const assetsDir = path.join(__dirname, '..', 'static');
 const trayIcon = nativeImage
@@ -84,6 +85,7 @@ function refreshTrayMenu() {
   }
   const template = [
     { label: 'Open Dashboard', click: () => focusMainWindow() },
+    { label: 'About Starlinker', click: () => openAboutWindow() },
     { label: 'Run Poll Now', click: () => triggerManualPoll() },
     { label: 'Snooze Alerts (45 min)', click: () => snoozeAlerts(45) },
     { type: 'separator' },
@@ -103,6 +105,75 @@ function createTray() {
   tray.on('double-click', () => focusMainWindow());
   refreshTrayMenu();
   return tray;
+}
+
+function openAboutWindow() {
+  if (aboutWindow && !aboutWindow.isDestroyed()) {
+    aboutWindow.focus();
+    return aboutWindow;
+  }
+
+  aboutWindow = new BrowserWindow({
+    width: 420,
+    height: 520,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    show: false,
+    title: 'About Starlinker',
+    backgroundColor: '#0f172a',
+    autoHideMenuBar: true,
+    webPreferences: {
+      devTools: false,
+    },
+  });
+
+  aboutWindow.on('closed', () => {
+    aboutWindow = undefined;
+  });
+
+  aboutWindow.loadFile(path.join(assetsDir, 'about.html'), {
+    query: { version: app.getVersion() },
+  });
+
+  aboutWindow.once('ready-to-show', () => {
+    if (!aboutWindow || aboutWindow.isDestroyed()) {
+      return;
+    }
+    aboutWindow.show();
+  });
+
+  return aboutWindow;
+}
+
+function createApplicationMenu() {
+  const template = [
+    {
+      label: 'File',
+      submenu: [
+        { label: 'About Starlinker', click: () => openAboutWindow() },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+  ];
+
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
 }
 
 ipcMain.handle('starlinker:autostart:get', () => {
@@ -279,6 +350,17 @@ async function waitForBackendReady(timeoutMs = 20000) {
 }
 
 async function onAppReady() {
+  createApplicationMenu();
+  if (app.setAboutPanelOptions) {
+    app.setAboutPanelOptions({
+      applicationName: 'Starlinker Shell',
+      applicationVersion: app.getVersion(),
+      copyright: '© 2024 Starlinker',
+      credits: 'ForgeCore + Electron shell experiment',
+      website: 'https://github.com/starlinker',
+    });
+  }
+
   splashWindow = createSplashWindow();
   updateSplashStatus('Starting Starlinker backend...');
   startBackend();

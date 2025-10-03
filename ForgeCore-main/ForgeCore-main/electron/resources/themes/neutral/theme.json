@@ -1,0 +1,8 @@
+{
+  "name": "Neutral",
+  "description": "Low-contrast neutral theme for focus work.",
+  "accent": "#6366f1",
+  "background": "#111827",
+  "surface": "#1f2937",
+  "text": "#e5e7eb"
+}
