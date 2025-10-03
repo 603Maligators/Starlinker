@@ -347,12 +347,19 @@ export function mergeWizardState(
   } as IncompleteMap;
 
   for (const step of WIZARD_STEP_ORDER) {
-    const restoredStep = restoredSteps[step];
-    if (restoredStep?.status === 'saving') {
-      restoredSteps[step] = {
-        ...restoredStep,
-        status: 'editing',
-      };
+    const existingStep = restoredSteps[step];
+    if (!existingStep) {
+      continue;
+    }
+
+    const sanitizedStep = {
+      ...existingStep,
+      status: existingStep.status === 'saving' ? 'editing' : existingStep.status,
+    };
+
+    restoredSteps[step] = sanitizedStep;
+
+    if (existingStep.status === 'saving') {
       restoredIncomplete[step] = true;
     }
   }
