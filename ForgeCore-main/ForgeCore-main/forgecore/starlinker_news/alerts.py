@@ -235,8 +235,19 @@ class DigestService:
             webhook = config.outputs.discord_webhook.strip()
             if webhook:
                 try:
-                    await client.post(webhook, json={"content": body[:1800]})
+                    response = await client.post(webhook, json={"content": body[:1800]})
+                    response.raise_for_status()
                     delivered_channels.append("discord")
+                except httpx.HTTPStatusError as exc:  # pragma: no cover - defensive
+                    self._database.record_error(
+                        module="digest.dispatch",
+                        message=str(exc),
+                        details={
+                            "channel": "discord",
+                            "status_code": exc.response.status_code,
+                            "response_text": exc.response.text,
+                        },
+                    )
                 except Exception as exc:  # pragma: no cover - defensive
                     self._database.record_error(
                         module="digest.dispatch",
