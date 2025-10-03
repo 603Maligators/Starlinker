@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence
 
 from .config import StarlinkerConfig
 
@@ -140,6 +140,120 @@ class StarlinkerDatabase:
             "last_error": dict(error_row) if error_row else None,
         }
 
+    # Signal queries ---------------------------------------------------
+
+    def fetch_signals(
+        self,
+        *,
+        since: Optional[datetime] = None,
+        min_priority: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> List["StoredSignal"]:
+        query = [
+            "SELECT id, source, title, url, published_at, fetched_at,",
+            "raw_excerpt, summary, tags_json, priority",
+            "FROM signals",
+        ]
+        conditions: List[str] = []
+        params: List[Any] = []
+        if since is not None:
+            conditions.append("fetched_at >= ?")
+            params.append(_ensure_iso(since))
+        if min_priority is not None:
+            conditions.append("priority >= ?")
+            params.append(int(min_priority))
+        if conditions:
+            query.append("WHERE " + " AND ".join(conditions))
+        query.append("ORDER BY published_at DESC")
+        if limit is not None:
+            query.append("LIMIT ?")
+            params.append(int(limit))
+        sql = "\n".join(query)
+        results: List[StoredSignal] = []
+        with self.connect() as conn:
+            cursor = conn.execute(sql, params)
+            for row in cursor.fetchall():
+                results.append(_row_to_signal(row))
+        return results
+
+    # Alert helpers ----------------------------------------------------
+
+    def record_alert(
+        self,
+        *,
+        alert_type: str,
+        title: str,
+        url: Optional[str],
+        delivered_channels: Sequence[str],
+        dedup_key: str,
+        created_at: Optional[datetime] = None,
+    ) -> None:
+        created = _ensure_iso(created_at or datetime.now(timezone.utc))
+        channels_json = json.dumps(list(delivered_channels))
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO alerts(created_at, type, title, url, delivered_channels_json, dedup_key)
+                VALUES(?, ?, ?, ?, ?, ?)
+                """,
+                (created, alert_type, title, url, channels_json, dedup_key),
+            )
+            conn.commit()
+
+    def alert_exists(self, dedup_key: str) -> bool:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT id FROM alerts WHERE dedup_key = ? LIMIT 1",
+                (dedup_key,),
+            ).fetchone()
+            return bool(row)
+
+    def list_alerts(self, *, limit: Optional[int] = None) -> List["AlertRecord"]:
+        sql = "SELECT id, created_at, type, title, url, delivered_channels_json, dedup_key FROM alerts ORDER BY created_at DESC"
+        params: List[Any] = []
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        alerts: List[AlertRecord] = []
+        with self.connect() as conn:
+            cursor = conn.execute(sql, params)
+            for row in cursor.fetchall():
+                alerts.append(_row_to_alert(row))
+        return alerts
+
+    # Digest helpers ---------------------------------------------------
+
+    def record_digest(
+        self,
+        *,
+        digest_type: str,
+        body_markdown: str,
+        sent_at: Optional[datetime] = None,
+    ) -> None:
+        ts = _ensure_iso(sent_at or datetime.now(timezone.utc))
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO digests(sent_at, type, body_markdown)
+                VALUES(?, ?, ?)
+                """,
+                (ts, digest_type, body_markdown),
+            )
+            conn.commit()
+
+    def list_digests(self, *, limit: Optional[int] = None) -> List["DigestRecord"]:
+        sql = "SELECT id, sent_at, type, body_markdown FROM digests ORDER BY sent_at DESC"
+        params: List[Any] = []
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        digests: List[DigestRecord] = []
+        with self.connect() as conn:
+            cursor = conn.execute(sql, params)
+            for row in cursor.fetchall():
+                digests.append(_row_to_digest(row))
+        return digests
+
     def store_signals(self, signals: Iterable["NormalizedSignal"]) -> int:
         from .ingest.models import NormalizedSignal  # local import to avoid cycle
 
@@ -256,3 +370,108 @@ class SettingsRepository:
             else:
                 result[key] = value
         return result
+
+
+@dataclass
+class StoredSignal:
+    id: int
+    source: str
+    title: str
+    url: str
+    published_at: datetime
+    fetched_at: datetime
+    raw_excerpt: Optional[str]
+    summary: Optional[str]
+    tags: Sequence[str]
+    priority: int
+
+
+@dataclass
+class AlertRecord:
+    id: int
+    created_at: datetime
+    type: str
+    title: str
+    url: Optional[str]
+    delivered_channels: Sequence[str]
+    dedup_key: str
+
+
+@dataclass
+class DigestRecord:
+    id: int
+    sent_at: datetime
+    type: str
+    body_markdown: str
+
+
+def _ensure_iso(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+def _parse_iso(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _row_to_signal(row: sqlite3.Row) -> StoredSignal:
+    tags_raw = row["tags_json"]
+    tags: Sequence[str]
+    if tags_raw:
+        try:
+            payload = json.loads(tags_raw)
+            if isinstance(payload, list):
+                tags = tuple(str(item) for item in payload if item)
+            else:
+                tags = tuple()
+        except json.JSONDecodeError:
+            tags = tuple()
+    else:
+        tags = tuple()
+    return StoredSignal(
+        id=row["id"],
+        source=row["source"],
+        title=row["title"],
+        url=row["url"],
+        published_at=_parse_iso(row["published_at"]),
+        fetched_at=_parse_iso(row["fetched_at"]),
+        raw_excerpt=row["raw_excerpt"],
+        summary=row["summary"],
+        tags=tags,
+        priority=int(row["priority"] or 0),
+    )
+
+
+def _row_to_alert(row: sqlite3.Row) -> AlertRecord:
+    delivered_raw = row["delivered_channels_json"]
+    delivered: Sequence[str]
+    if delivered_raw:
+        try:
+            payload = json.loads(delivered_raw)
+            if isinstance(payload, list):
+                delivered = tuple(str(item) for item in payload if item)
+            else:
+                delivered = tuple()
+        except json.JSONDecodeError:
+            delivered = tuple()
+    else:
+        delivered = tuple()
+    return AlertRecord(
+        id=row["id"],
+        created_at=_parse_iso(row["created_at"]),
+        type=row["type"],
+        title=row["title"],
+        url=row["url"],
+        delivered_channels=delivered,
+        dedup_key=row["dedup_key"],
+    )
+
+
+def _row_to_digest(row: sqlite3.Row) -> DigestRecord:
+    return DigestRecord(
+        id=row["id"],
+        sent_at=_parse_iso(row["sent_at"]),
+        type=row["type"],
+        body_markdown=row["body_markdown"],
+    )

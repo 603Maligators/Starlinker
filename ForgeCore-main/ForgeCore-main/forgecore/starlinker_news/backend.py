@@ -9,6 +9,7 @@ from typing import Optional
 from collections.abc import Mapping
 from typing import Any
 
+from .alerts import AlertsService, DigestService
 from .config import StarlinkerConfig
 from .ingest import IngestManager, RSIPatchNotesIngest
 from .scheduler import HealthStatus, SchedulerService
@@ -34,8 +35,15 @@ class StarlinkerBackend:
         self.ingest.register_module(RSIPatchNotesIngest())
         self.health = HealthStatus()
         config = self.settings.load()
+        http_factory = AlertsService._default_client_factory
+        self.alerts = AlertsService(self.database, http_client_factory=http_factory)
+        self.digest = DigestService(self.database, http_client_factory=http_factory)
         self.scheduler = SchedulerService(
-            self.settings, self.health, ingest_manager=self.ingest
+            self.settings,
+            self.health,
+            ingest_manager=self.ingest,
+            alerts_service=self.alerts,
+            digest_service=self.digest,
         )
         self.scheduler.refresh_config(config)
 
@@ -65,6 +73,10 @@ class StarlinkerBackend:
     def missing_prerequisites(self, config: Optional[StarlinkerConfig] = None) -> list[str]:
         cfg = config or self.settings.load()
         return self.settings.missing_prerequisites(cfg)
+
+    def preview_digest(self, digest_type: str) -> dict[str, object]:
+        config = self.settings.load()
+        return self.digest.preview(digest_type, config)
 
     def create_app(self):  # pragma: no cover - thin wrapper
         from .api import create_app

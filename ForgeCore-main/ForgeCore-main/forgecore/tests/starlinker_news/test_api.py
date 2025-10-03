@@ -1,7 +1,10 @@
+from datetime import datetime, timezone
+
 from fastapi.testclient import TestClient
 
 from forgecore.starlinker_news.api import create_app
 from forgecore.starlinker_news.backend import StarlinkerBackend
+from forgecore.starlinker_news.ingest.models import NormalizedSignal
 
 
 def test_health_endpoint_reports_defaults(tmp_path):
@@ -76,3 +79,29 @@ def test_settings_defaults_and_schema(tmp_path):
     assert defaults["schedule"]["priority_poll_minutes"] == 60
     assert "properties" in schema
     assert "timezone" in schema["properties"]
+
+
+def test_digest_preview_endpoint_returns_markdown(tmp_path):
+    backend = StarlinkerBackend(tmp_path)
+    now = datetime.now(timezone.utc)
+    backend.database.store_signals(
+        [
+            NormalizedSignal(
+                source="rsi.patch_notes.live",
+                title="Patch",
+                url="https://example.com",
+                published_at=now,
+                fetched_at=now,
+                tags=("live",),
+                priority=80,
+            )
+        ]
+    )
+    app = create_app(backend=backend)
+    with TestClient(app) as client:
+        response = client.get("/digest/preview", params={"digest_type": "daily"})
+        payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["digest"] == "daily"
+    assert "Patch" in payload["body"]
