@@ -9,8 +9,77 @@ from datetime import datetime, timezone
 import httpx
 
 from forgecore.starlinker_news.config import StarlinkerConfig
-from forgecore.starlinker_news.ingest import IngestManager, RSIPatchNotesIngest
+from forgecore.starlinker_news.ingest import (
+    IngestManager,
+    NormalizedSignal,
+    RSIPatchNotesIngest,
+)
 from forgecore.starlinker_news.store import StarlinkerDatabase
+
+
+def test_normalized_signal_serialization_cleans_tags_and_timezone() -> None:
+    published = datetime(2024, 1, 1, 12, 0)  # naive
+    fetched = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)
+    signal = NormalizedSignal(
+        source="test",
+        title="Example",
+        url="https://example.com",
+        published_at=published,
+        fetched_at=fetched,
+        tags=["alpha", "", None, "beta"],
+        priority=10,
+    )
+
+    assert signal.published_at.tzinfo == timezone.utc
+    assert signal.fetched_at.tzinfo == timezone.utc
+    assert signal.tags == ("alpha", "beta")
+
+    row = signal.to_row()
+    assert row["published_at"].endswith("+00:00")
+    assert row["tags_json"] == "[\"alpha\", \"beta\"]"
+
+
+def test_patch_notes_build_url_handles_relative_paths() -> None:
+    ingest = RSIPatchNotesIngest()
+
+    absolute = ingest._build_url("https://example.com/post")
+    relative = ingest._build_url("comm-link/post")
+    empty = ingest._build_url("")
+
+    assert absolute == "https://example.com/post"
+    assert relative == "https://robertsspaceindustries.com/comm-link/post"
+    assert empty == "https://robertsspaceindustries.com/"
+
+
+def test_patch_notes_parse_datetime_supports_multiple_formats() -> None:
+    ingest = RSIPatchNotesIngest()
+
+    from_timestamp = ingest._parse_datetime(1700000000)
+    from_iso = ingest._parse_datetime("2024-01-01T09:15:00Z")
+    fallback = ingest._parse_datetime("not-a-date")
+
+    assert from_timestamp.tzinfo == timezone.utc
+    assert from_iso.tzinfo == timezone.utc
+    assert abs((fallback - datetime.now(timezone.utc)).total_seconds()) < 5
+
+
+def test_patch_notes_normalize_item_scores_priority() -> None:
+    ingest = RSIPatchNotesIngest()
+    now = datetime(2024, 1, 1, 15, tzinfo=timezone.utc)
+    payload = {
+        "title": "LIVE Hotfix",
+        "url": "/comm-link/post",
+        "published_at": "2024-01-01T10:00:00Z",
+        "excerpt": "Notes",
+        "channel": "LIVE",
+    }
+
+    live = ingest._normalize_item(payload, channel="LIVE", fetched_at=now)
+    ptu = ingest._normalize_item(payload | {"channel": "PTU"}, channel="PTU", fetched_at=now)
+
+    assert live.priority >= 85  # hotfix keywords boost priority
+    assert ptu.source == "rsi.patch_notes.ptu"
+    assert "live" in live.tags and "ptu" in ptu.tags
 
 
 def test_patch_notes_ingest_persists_signals(tmp_path) -> None:
