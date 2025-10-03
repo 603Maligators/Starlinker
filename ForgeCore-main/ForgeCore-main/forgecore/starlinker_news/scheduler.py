@@ -1,15 +1,22 @@
-"""Scheduler implementation for manual triggers and timed automation."""
+"""Scheduler implementation using APScheduler for Starlinker."""
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from threading import Event, Lock, Timer
-from typing import Callable, Dict, Optional
+from datetime import datetime, timezone
+from threading import Event, Lock, Thread
+from typing import Awaitable, Callable, Dict, Optional
 
+from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED, JobEvent
+from apscheduler.jobstores.base import JobLookupError
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .config import StarlinkerConfig
+from .ingest.manager import IngestManager
 
 
 def _iso(dt: Optional[datetime]) -> Optional[str]:
@@ -78,15 +85,21 @@ class SchedulerService:
         settings_repo,
         health: Optional[HealthStatus] = None,
         *,
+        ingest_manager: Optional[IngestManager] = None,
         clock: Optional[Callable[[], datetime]] = None,
         interval_scale: float = 1.0,
     ) -> None:
         self._settings_repo = settings_repo
         self._health = health or HealthStatus()
+        self._ingest = ingest_manager
         self._lock = Lock()
         self._stop_event = Event()
-        self._timers: Dict[str, Timer] = {}
-        self._next_runs: Dict[str, datetime] = {}
+        self._ready = Event()
+        self._thread: Optional[Thread] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._scheduler: Optional[AsyncIOScheduler] = None
+        self._jobs: Dict[str, str] = {}
+        self._next_runs: Dict[str, Optional[datetime]] = {}
         self._config: Optional[StarlinkerConfig] = None
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._interval_scale = interval_scale
@@ -100,15 +113,26 @@ class SchedulerService:
             self._config = config
             self._health.mark_started()
             self._health.update_config(config)
+            self._start_loop_locked()
             self._schedule_from_config_locked()
 
     def stop(self) -> None:
+        thread: Optional[Thread] = None
         with self._lock:
             if not self._health.running:
                 return
             self._stop_event.set()
-            self._cancel_timers_locked()
+            self._cancel_jobs_locked()
             self._health.mark_stopped()
+            loop = self._loop
+            if loop and loop.is_running():
+                loop.call_soon_threadsafe(loop.stop)
+            thread = self._thread
+            self._thread = None
+            self._loop = None
+            self._scheduler = None
+        if thread:
+            thread.join(timeout=2.0)
 
     def refresh_config(self, config: Optional[StarlinkerConfig] = None) -> StarlinkerConfig:
         with self._lock:
@@ -116,24 +140,28 @@ class SchedulerService:
             self._config = cfg
             self._health.update_config(cfg)
             if self._health.running and not self._stop_event.is_set():
-                self._cancel_timers_locked()
+                self._cancel_jobs_locked()
                 self._schedule_from_config_locked()
             return cfg
 
     def trigger_poll(self, reason: str = "manual") -> Dict[str, str]:
-        now = self._clock()
-        self._health.record_poll(now, reason)
-        return {"triggered_at": _iso(now), "reason": reason}
+        triggered_at = self._clock()
+        self._submit_coroutine(self._run_poll(reason=reason, triggered_at=triggered_at))
+        return {"triggered_at": _iso(triggered_at), "reason": reason}
 
     def trigger_digest(self, digest_type: str = "daily") -> Dict[str, str]:
-        now = self._clock()
-        self._health.record_digest(now, digest_type)
-        return {"triggered_at": _iso(now), "type": digest_type}
+        triggered_at = self._clock()
+        self._submit_coroutine(
+            self._run_digest(digest_type=digest_type, triggered_at=triggered_at)
+        )
+        return {"triggered_at": _iso(triggered_at), "type": digest_type}
 
     def describe(self) -> Dict[str, Optional[str]]:
         snapshot = self._health.snapshot()
         with self._lock:
-            snapshot["next_runs"] = {k: _iso(v) for k, v in self._next_runs.items()}
+            snapshot["next_runs"] = {
+                k: _iso(v) for k, v in self._next_runs.items() if v is not None
+            }
         return snapshot
 
     @property
@@ -142,148 +170,248 @@ class SchedulerService:
 
     # Internal helpers -------------------------------------------------
 
-    def _cancel_timers_locked(self) -> None:
-        for timer in self._timers.values():
-            timer.cancel()
-        self._timers.clear()
+    def _start_loop_locked(self) -> None:
+        if self._loop and self._loop.is_running():
+            return
+        loop = asyncio.new_event_loop()
+        self._loop = loop
+        self._ready.clear()
+
+        def _runner() -> None:
+            asyncio.set_event_loop(loop)
+            scheduler = AsyncIOScheduler(event_loop=loop, timezone=timezone.utc)
+            scheduler.add_listener(
+                self._on_job_event, EVENT_JOB_EXECUTED | EVENT_JOB_ERROR
+            )
+            self._scheduler = scheduler
+            scheduler.start()
+            self._ready.set()
+            try:
+                loop.run_forever()
+            finally:
+                scheduler.shutdown(wait=False)
+                self._ready.clear()
+                loop.close()
+
+        thread = Thread(target=_runner, name="StarlinkerScheduler", daemon=True)
+        self._thread = thread
+        thread.start()
+        self._ready.wait()
+
+    def _submit_coroutine(self, coro: Awaitable[None]) -> None:
+        loop = self._loop
+        if loop and loop.is_running():
+            asyncio.run_coroutine_threadsafe(coro, loop)
+            return
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running and running.is_running():
+            running.create_task(coro)
+        else:
+            asyncio.run(coro)
+
+    async def _run_poll(self, *, reason: str, triggered_at: datetime) -> None:
+        self._health.record_poll(triggered_at, reason)
+        ingest = self._ingest
+        config = self._config or self._settings_repo.load()
+        if ingest is not None:
+            await ingest.run_poll(config, reason=reason, triggered_at=triggered_at)
+
+    async def _run_digest(self, *, digest_type: str, triggered_at: datetime) -> None:
+        self._health.record_digest(triggered_at, digest_type)
+
+    def _cancel_jobs_locked(self) -> None:
         self._next_runs.clear()
+        if not self._loop or not self._scheduler:
+            self._jobs.clear()
+            return
+
+        done = Event()
+
+        def _cancel() -> None:
+            if self._scheduler:
+                self._scheduler.remove_all_jobs()
+            self._jobs.clear()
+            done.set()
+
+        if self._loop.is_running():
+            self._loop.call_soon_threadsafe(_cancel)
+            done.wait()
+        else:
+            _cancel()
 
     def _schedule_from_config_locked(self) -> None:
         if self._stop_event.is_set():
             return
         cfg = self._config or self._settings_repo.load()
         schedule = cfg.schedule
-        self._schedule_poll_locked(
-            minutes=float(schedule.priority_poll_minutes),
-            reason="schedule:priority",
+        self._schedule_interval_job(
             name="priority_poll",
+            seconds=float(schedule.priority_poll_minutes) * 60.0,
+            reason="schedule:priority",
         )
-        self._schedule_poll_locked(
-            minutes=float(schedule.standard_poll_hours) * 60.0,
-            reason="schedule:standard",
+        self._schedule_interval_job(
             name="standard_poll",
+            seconds=float(schedule.standard_poll_hours) * 3600.0,
+            reason="schedule:standard",
         )
         self._schedule_daily_digest_locked(cfg)
         self._schedule_weekly_digest_locked(cfg)
 
-    def _register_timer_locked(
-        self, name: str, seconds: Optional[float], callback: Callable[[], None]
-    ) -> None:
-        existing = self._timers.pop(name, None)
-        if existing is not None:
-            existing.cancel()
-        if seconds is None or seconds <= 0 or self._stop_event.is_set():
-            self._next_runs.pop(name, None)
+    def _schedule_interval_job(self, *, name: str, seconds: float, reason: str) -> None:
+        if seconds <= 0:
+            self._remove_job_locked(name)
             return
-        scaled = seconds * self._interval_scale
-        if scaled <= 0:
-            self._next_runs.pop(name, None)
+        interval_seconds = seconds * self._interval_scale
+        if interval_seconds <= 0:
+            self._remove_job_locked(name)
             return
-        run_at = self._clock() + timedelta(seconds=seconds)
-        self._next_runs[name] = run_at
-        timer = Timer(scaled, callback)
-        timer.daemon = True
-        self._timers[name] = timer
-        timer.start()
-
-    def _schedule_poll_locked(self, *, minutes: float, reason: str, name: str) -> None:
-        seconds = minutes * 60.0
-
-        def _callback() -> None:
-            if self._stop_event.is_set():
-                return
-            self.trigger_poll(reason)
-            with self._lock:
-                if self._stop_event.is_set():
-                    self._timers.pop(name, None)
-                    self._next_runs.pop(name, None)
-                    return
-                self._schedule_poll_locked(minutes=minutes, reason=reason, name=name)
-
-        self._register_timer_locked(name, seconds, _callback)
+        trigger = IntervalTrigger(seconds=interval_seconds, timezone=timezone.utc)
+        self._add_job(
+            job_id=name,
+            trigger=trigger,
+            func=self._job_run_poll,
+            kwargs={"reason": reason, "job_name": name},
+        )
 
     def _schedule_daily_digest_locked(
         self, config: Optional[StarlinkerConfig] = None
     ) -> None:
         cfg = config or self._config or self._settings_repo.load()
-        seconds = self._seconds_until_daily(cfg)
-
-        def _callback() -> None:
-            if self._stop_event.is_set():
-                return
-            self.trigger_digest("daily")
-            with self._lock:
-                if self._stop_event.is_set():
-                    self._timers.pop("digest_daily", None)
-                    self._next_runs.pop("digest_daily", None)
-                    return
-                self._schedule_daily_digest_locked()
-
-        self._register_timer_locked("digest_daily", seconds, _callback)
+        target = cfg.schedule.digest_daily.strip()
+        if not target:
+            self._remove_job_locked("digest_daily")
+            return
+        try:
+            hour, minute = (int(part) for part in target.split(":", 1))
+        except ValueError:
+            self._remove_job_locked("digest_daily")
+            return
+        tz = _resolve_timezone(cfg.timezone)
+        trigger = CronTrigger(hour=hour, minute=minute, timezone=tz)
+        self._add_job(
+            job_id="digest_daily",
+            trigger=trigger,
+            func=self._job_run_digest,
+            kwargs={"digest_type": "daily", "job_name": "digest_daily"},
+        )
 
     def _schedule_weekly_digest_locked(
         self, config: Optional[StarlinkerConfig] = None
     ) -> None:
         cfg = config or self._config or self._settings_repo.load()
-        seconds = self._seconds_until_weekly(cfg)
-
-        def _callback() -> None:
-            if self._stop_event.is_set():
-                return
-            self.trigger_digest("weekly")
-            with self._lock:
-                if self._stop_event.is_set():
-                    self._timers.pop("digest_weekly", None)
-                    self._next_runs.pop("digest_weekly", None)
-                    return
-                self._schedule_weekly_digest_locked()
-
-        self._register_timer_locked("digest_weekly", seconds, _callback)
-
-    def _seconds_until_daily(self, config: StarlinkerConfig) -> Optional[float]:
-        target = config.schedule.digest_daily.strip()
+        target = cfg.schedule.digest_weekly.strip()
         if not target:
-            return None
-        try:
-            hour, minute = (int(part) for part in target.split(":", 1))
-        except ValueError:
-            return None
-        tz = _resolve_timezone(config.timezone)
-        now_local = self._clock().astimezone(tz)
-        candidate = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if candidate <= now_local:
-            candidate += timedelta(days=1)
-        return (candidate - now_local).total_seconds()
-
-    def _seconds_until_weekly(self, config: StarlinkerConfig) -> Optional[float]:
-        target = config.schedule.digest_weekly.strip()
-        if not target:
-            return None
+            self._remove_job_locked("digest_weekly")
+            return
         parts = target.split()
         if len(parts) != 2:
-            return None
+            self._remove_job_locked("digest_weekly")
+            return
         day_raw, time_raw = parts
-        day_key = day_raw.lower()[:3]
         weekdays = {
-            "mon": 0,
-            "tue": 1,
-            "wed": 2,
-            "thu": 3,
-            "fri": 4,
-            "sat": 5,
-            "sun": 6,
+            "mon": "mon",
+            "tue": "tue",
+            "wed": "wed",
+            "thu": "thu",
+            "fri": "fri",
+            "sat": "sat",
+            "sun": "sun",
         }
+        day_key = day_raw.lower()[:3]
         if day_key not in weekdays:
-            return None
+            self._remove_job_locked("digest_weekly")
+            return
         try:
             hour, minute = (int(part) for part in time_raw.split(":", 1))
         except ValueError:
-            return None
-        tz = _resolve_timezone(config.timezone)
-        now_local = self._clock().astimezone(tz)
-        candidate = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        day_offset = (weekdays[day_key] - now_local.weekday()) % 7
-        if day_offset == 0 and candidate <= now_local:
-            day_offset = 7
-        candidate += timedelta(days=day_offset)
-        return (candidate - now_local).total_seconds()
+            self._remove_job_locked("digest_weekly")
+            return
+        tz = _resolve_timezone(cfg.timezone)
+        trigger = CronTrigger(
+            day_of_week=weekdays[day_key], hour=hour, minute=minute, timezone=tz
+        )
+        self._add_job(
+            job_id="digest_weekly",
+            trigger=trigger,
+            func=self._job_run_digest,
+            kwargs={"digest_type": "weekly", "job_name": "digest_weekly"},
+        )
+
+    def _add_job(self, *, job_id: str, trigger, func, kwargs: Dict[str, object]) -> None:
+        if not self._loop or not self._scheduler:
+            return
+        done = Event()
+
+        def _schedule() -> None:
+            if not self._scheduler:
+                done.set()
+                return
+            try:
+                self._scheduler.remove_job(job_id)
+            except JobLookupError:
+                pass
+            job = self._scheduler.add_job(
+                func,
+                trigger=trigger,
+                id=job_id,
+                kwargs=kwargs,
+                coalesce=True,
+                max_instances=1,
+            )
+            self._jobs[job_id] = job.id
+            self._next_runs[job_id] = job.next_run_time
+            done.set()
+
+        self._loop.call_soon_threadsafe(_schedule)
+        done.wait()
+
+    def _remove_job_locked(self, name: str) -> None:
+        self._next_runs.pop(name, None)
+        if not self._loop or not self._scheduler:
+            self._jobs.pop(name, None)
+            return
+
+        done = Event()
+
+        def _remove() -> None:
+            if self._scheduler:
+                try:
+                    self._scheduler.remove_job(name)
+                except JobLookupError:
+                    pass
+            self._jobs.pop(name, None)
+            done.set()
+
+        if self._loop.is_running():
+            self._loop.call_soon_threadsafe(_remove)
+            done.wait()
+        else:
+            _remove()
+
+    async def _job_run_poll(self, *, reason: str, job_name: str) -> None:
+        if self._stop_event.is_set():
+            return
+        await self._run_poll(reason=reason, triggered_at=self._clock())
+
+    async def _job_run_digest(self, *, digest_type: str, job_name: str) -> None:
+        if self._stop_event.is_set():
+            return
+        await self._run_digest(digest_type=digest_type, triggered_at=self._clock())
+
+    def _on_job_event(self, event: JobEvent) -> None:
+        job_id = event.job_id
+        if job_id is None:
+            return
+        with self._lock:
+            if not self._scheduler:
+                self._next_runs.pop(job_id, None)
+                return
+            job = self._scheduler.get_job(job_id)
+            if job and job.next_run_time:
+                self._next_runs[job_id] = job.next_run_time
+            else:
+                self._next_runs.pop(job_id, None)
+

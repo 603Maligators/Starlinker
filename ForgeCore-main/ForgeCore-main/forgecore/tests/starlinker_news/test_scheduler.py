@@ -4,8 +4,33 @@ from __future__ import annotations
 
 import time
 
+from threading import Lock
+
 from forgecore.starlinker_news.scheduler import HealthStatus, SchedulerService
 from forgecore.starlinker_news.store import SettingsRepository, StarlinkerDatabase
+
+class StubIngestManager:
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._calls: list[dict] = []
+
+    async def run_poll(self, config, *, reason: str, triggered_at):
+        with self._lock:
+            self._calls.append({
+                "config": config,
+                "reason": reason,
+                "triggered_at": triggered_at,
+            })
+
+    def poll_count(self) -> int:
+        with self._lock:
+            return len(self._calls)
+
+    def last_reason(self) -> str | None:
+        with self._lock:
+            if not self._calls:
+                return None
+            return self._calls[-1]["reason"]
 
 
 def _wait_for(predicate, *, timeout: float = 3.0, interval: float = 0.05) -> bool:
@@ -27,8 +52,9 @@ def test_scheduler_triggers_priority_poll_periodically(tmp_path) -> None:
     config.schedule.digest_weekly = ""
     settings.save(config)
 
+    ingest = StubIngestManager()
     scheduler = SchedulerService(
-        settings, HealthStatus(), interval_scale=0.01
+        settings, HealthStatus(), ingest_manager=ingest, interval_scale=0.01
     )  # scale 1 minute -> ~0.6s for tests
     try:
         scheduler.start()
@@ -36,10 +62,9 @@ def test_scheduler_triggers_priority_poll_periodically(tmp_path) -> None:
         assert snapshot["running"] is True
         assert "priority_poll" in snapshot["next_runs"]
 
-        triggered = _wait_for(
-            lambda: scheduler.describe()["last_poll_reason"] == "schedule:priority"
-        )
+        triggered = _wait_for(lambda: ingest.poll_count() > 0)
         assert triggered, "priority poll was not triggered automatically"
+        assert ingest.last_reason() == "schedule:priority"
     finally:
         scheduler.stop()
 
@@ -52,7 +77,10 @@ def test_refresh_config_reschedules_priority_poll(tmp_path) -> None:
     baseline.schedule.standard_poll_hours = 0
     settings.save(baseline)
 
-    scheduler = SchedulerService(settings, HealthStatus(), interval_scale=0.01)
+    ingest = StubIngestManager()
+    scheduler = SchedulerService(
+        settings, HealthStatus(), ingest_manager=ingest, interval_scale=0.01
+    )
     try:
         scheduler.start()
         assert "priority_poll" in scheduler.describe()["next_runs"]
@@ -75,10 +103,30 @@ def test_scheduler_stop_clears_state(tmp_path) -> None:
     config.schedule.standard_poll_hours = 0
     settings.save(config)
 
-    scheduler = SchedulerService(settings, HealthStatus(), interval_scale=0.01)
+    ingest = StubIngestManager()
+    scheduler = SchedulerService(
+        settings, HealthStatus(), ingest_manager=ingest, interval_scale=0.01
+    )
     scheduler.start()
     scheduler.stop()
 
     snapshot = scheduler.describe()
     assert snapshot["running"] is False
     assert snapshot["next_runs"] == {}
+
+
+def test_manual_trigger_uses_ingest(tmp_path) -> None:
+    database = StarlinkerDatabase(tmp_path / "starlinker.db")
+    settings = SettingsRepository(database)
+    ingest = StubIngestManager()
+    scheduler = SchedulerService(
+        settings, HealthStatus(), ingest_manager=ingest, interval_scale=0.01
+    )
+    try:
+        scheduler.start()
+        scheduler.trigger_poll("manual-test")
+        triggered = _wait_for(lambda: ingest.poll_count() > 0)
+        assert triggered
+        assert ingest.last_reason() == "manual-test"
+    finally:
+        scheduler.stop()

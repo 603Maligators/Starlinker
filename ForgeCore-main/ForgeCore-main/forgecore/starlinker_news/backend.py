@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .config import StarlinkerConfig
+from .ingest import IngestManager, RSIPatchNotesIngest
 from .scheduler import HealthStatus, SchedulerService
 from .store import SettingsRepository, StarlinkerDatabase
 
@@ -29,9 +30,13 @@ class StarlinkerBackend:
         self.database = StarlinkerDatabase(self._db_path)
         self.database.initialize()
         self.settings = SettingsRepository(self.database)
+        self.ingest = IngestManager(self.database)
+        self.ingest.register_module(RSIPatchNotesIngest())
         self.health = HealthStatus()
         config = self.settings.load()
-        self.scheduler = SchedulerService(self.settings, self.health)
+        self.scheduler = SchedulerService(
+            self.settings, self.health, ingest_manager=self.ingest
+        )
         self.scheduler.refresh_config(config)
 
     @property

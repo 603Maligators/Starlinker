@@ -12,6 +12,7 @@ setup(
         "uvicorn>=0.21.0",
         "pydantic>=2.0",
         "httpx>=0.24.1",
+        "apscheduler>=3.10.4",
     ],
     extras_require={
         "dev": ["pytest>=7.0.0"],
