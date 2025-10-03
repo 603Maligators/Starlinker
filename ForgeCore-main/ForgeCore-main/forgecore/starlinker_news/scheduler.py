@@ -86,12 +86,16 @@ class SchedulerService:
         health: Optional[HealthStatus] = None,
         *,
         ingest_manager: Optional[IngestManager] = None,
+        alerts_service=None,
+        digest_service=None,
         clock: Optional[Callable[[], datetime]] = None,
         interval_scale: float = 1.0,
     ) -> None:
         self._settings_repo = settings_repo
         self._health = health or HealthStatus()
         self._ingest = ingest_manager
+        self._alerts = alerts_service
+        self._digest = digest_service
         self._lock = Lock()
         self._stop_event = Event()
         self._ready = Event()
@@ -218,9 +222,28 @@ class SchedulerService:
         config = self._config or self._settings_repo.load()
         if ingest is not None:
             await ingest.run_poll(config, reason=reason, triggered_at=triggered_at)
+        if self._alerts is not None:
+            try:
+                await self._alerts.run(config, triggered_at=triggered_at)
+            except Exception as exc:  # pragma: no cover - defensive guard
+                self._settings_repo.database.record_error(
+                    module="scheduler.alerts",
+                    message=str(exc),
+                )
 
     async def _run_digest(self, *, digest_type: str, triggered_at: datetime) -> None:
         self._health.record_digest(triggered_at, digest_type)
+        config = self._config or self._settings_repo.load()
+        if self._digest is not None:
+            try:
+                await self._digest.run_digest(
+                    digest_type, config, triggered_at=triggered_at
+                )
+            except Exception as exc:  # pragma: no cover - defensive guard
+                self._settings_repo.database.record_error(
+                    module="scheduler.digest",
+                    message=str(exc),
+                )
 
     def _cancel_jobs_locked(self) -> None:
         self._next_runs.clear()

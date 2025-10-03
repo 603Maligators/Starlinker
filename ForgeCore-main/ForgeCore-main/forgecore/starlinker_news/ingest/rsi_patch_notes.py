@@ -78,6 +78,7 @@ class RSIPatchNotesIngest:
         tags: List[str] = ["rsi", "patch-notes", channel.lower()]
         if item.get("channel") and str(item.get("channel")).lower() not in tags:
             tags.append(str(item["channel"]).lower())
+        priority = self._score_priority(title, channel=channel)
         return NormalizedSignal(
             source=f"rsi.patch_notes.{channel.lower()}",
             title=title.strip(),
@@ -86,6 +87,7 @@ class RSIPatchNotesIngest:
             fetched_at=fetched_at,
             raw_excerpt=str(excerpt).strip() if excerpt else None,
             tags=tags,
+            priority=priority,
         )
 
     def _build_url(self, url_value: object) -> str:
@@ -109,3 +111,16 @@ class RSIPatchNotesIngest:
                 else:
                     return dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
         return datetime.now(timezone.utc)
+
+    def _score_priority(self, title: str, *, channel: str) -> int:
+        """Return an approximate priority score for an entry."""
+
+        base = 30 if channel.upper() == "PTU" else 50
+        if channel.upper() == "LIVE":
+            base = 80
+        lowered = title.lower()
+        if "hotfix" in lowered or "critical" in lowered:
+            base = max(base, 85)
+        if "spectrum" in lowered:
+            base = max(base, 40)
+        return base

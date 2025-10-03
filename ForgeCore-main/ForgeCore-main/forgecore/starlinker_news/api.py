@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, ValidationError
 
@@ -86,6 +86,10 @@ def create_app(
     @app.post("/run/digest")
     async def run_digest(request: DigestRequest) -> dict:
         return backend.scheduler.trigger_digest(request.type)
+
+    @app.get("/digest/preview")
+    async def preview_digest(digest_type: str = Query("daily")) -> dict[str, object]:
+        return backend.preview_digest(digest_type)
 
     @app.get("/appearance/themes")
     async def list_themes() -> dict:
