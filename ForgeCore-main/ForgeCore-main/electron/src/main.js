@@ -1,18 +1,126 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, Notification, ipcMain } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 
 const BACKEND_PORT = parseInt(process.env.STARLINKER_BACKEND_PORT || '8777', 10);
 const BACKEND_HOST = process.env.STARLINKER_BACKEND_HOST || '127.0.0.1';
 const HEALTH_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}/health`;
+const BACKEND_BASE_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}`;
+const AUTO_LAUNCH_SUPPORTED = process.platform === 'win32';
 
 let splashWindow;
 let mainWindow;
 let pendingSplashMessage = 'Initializing…';
 let backendProcess;
 let backendReady = false;
+let tray;
 
 const assetsDir = path.join(__dirname, '..', 'static');
+const trayIcon = nativeImage
+  .createFromDataURL(
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAQAAAC1+jfqAAAAKElEQVR4nGNgGAWjYBSMglEwCkbB////j4GBgQHhPwYmhgYGhgEAOUgEI8xQKvgAAAAASUVORK5CYII=',
+  )
+  .resize({ width: 16, height: 16 });
+
+function notify(title, body) {
+  if (Notification && Notification.isSupported && Notification.isSupported()) {
+    const notification = new Notification({ title: `Starlinker – ${title}`, body });
+    notification.show();
+  }
+}
+
+async function postJson(pathname, body) {
+  const response = await fetch(`${BACKEND_BASE_URL}${pathname}`, {
+    method: body ? 'POST' : 'GET',
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  const text = await response.text();
+  if (!text) {
+    return {};
+  }
+  return JSON.parse(text);
+}
+
+function focusMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
+  if (!backendReady) {
+    return;
+  }
+  mainWindow = createMainWindow();
+}
+
+async function triggerManualPoll() {
+  try {
+    const payload = await postJson('/run/poll', { reason: 'tray' });
+    notify('Poll triggered', `Polling requested (${payload.triggered_at ?? 'now'})`);
+  } catch (error) {
+    notify('Poll failed', error.message);
+  }
+}
+
+async function snoozeAlerts(minutes = 45) {
+  try {
+    const payload = await postJson('/alerts/snooze', { minutes });
+    notify('Alerts snoozed', `Alerts paused until ${payload.snoozed_until ?? 'later'}`);
+  } catch (error) {
+    notify('Failed to snooze alerts', error.message);
+  }
+}
+
+function refreshTrayMenu() {
+  if (!tray) {
+    return;
+  }
+  const template = [
+    { label: 'Open Dashboard', click: () => focusMainWindow() },
+    { label: 'Run Poll Now', click: () => triggerManualPoll() },
+    { label: 'Snooze Alerts (45 min)', click: () => snoozeAlerts(45) },
+    { type: 'separator' },
+    { label: 'Quit', click: () => app.quit() },
+  ];
+  tray.setContextMenu(Menu.buildFromTemplate(template));
+}
+
+function createTray() {
+  if (tray) {
+    refreshTrayMenu();
+    return tray;
+  }
+  tray = new Tray(trayIcon);
+  tray.setToolTip('Starlinker');
+  tray.on('click', () => focusMainWindow());
+  tray.on('double-click', () => focusMainWindow());
+  refreshTrayMenu();
+  return tray;
+}
+
+ipcMain.handle('starlinker:autostart:get', () => {
+  if (!AUTO_LAUNCH_SUPPORTED) {
+    return { supported: false, enabled: false };
+  }
+  const settings = app.getLoginItemSettings();
+  return { supported: true, enabled: settings.openAtLogin };
+});
+
+ipcMain.handle('starlinker:autostart:set', (_event, enabled) => {
+  if (!AUTO_LAUNCH_SUPPORTED) {
+    return { supported: false, enabled: false };
+  }
+  app.setLoginItemSettings({ openAtLogin: Boolean(enabled), path: process.execPath });
+  const settings = app.getLoginItemSettings();
+  return { supported: true, enabled: settings.openAtLogin };
+});
 
 function updateSplashStatus(message) {
   pendingSplashMessage = message;
@@ -72,6 +180,7 @@ function createMainWindow() {
     backgroundColor: '#0b1120',
     webPreferences: {
       contextIsolation: true,
+      preload: path.join(__dirname, 'preload.js'),
     },
   });
 
@@ -92,6 +201,8 @@ function createMainWindow() {
   window.on('closed', () => {
     mainWindow = undefined;
   });
+
+  createTray();
 
   return window;
 }
@@ -211,6 +322,10 @@ app.on('ready', onAppReady);
 
 app.on('before-quit', () => {
   stopBackend();
+  if (tray) {
+    tray.destroy();
+    tray = undefined;
+  }
 });
 
 app.on('window-all-closed', () => {

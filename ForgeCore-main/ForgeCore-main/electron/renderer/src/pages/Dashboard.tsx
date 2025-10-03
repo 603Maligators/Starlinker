@@ -9,12 +9,14 @@ import { useWizardStore, WIZARD_STEP_ORDER, WIZARD_STEPS } from '../state/wizard
 type HealthResponse = {
   status?: string;
   version?: string;
+  missing?: string[];
 };
 
 export function Dashboard() {
   const backendHealth = useAppStore((state) => state.backendHealth);
   const setBackendHealth = useAppStore((state) => state.setBackendHealth);
   const updateBackendHealth = useAppStore((state) => state.updateBackendHealth);
+  const setMissingPrerequisites = useAppStore((state) => state.setMissingPrerequisites);
   const navigate = useNavigate();
   const startWizard = useWizardStore((state) => state.startWizard);
   const incompleteSteps = useWizardStore((state) =>
@@ -61,16 +63,20 @@ export function Dashboard() {
         latencyMs: latency,
         version: payload.version ?? 'unknown',
       });
+      if (Array.isArray(payload.missing)) {
+        setMissingPrerequisites(payload.missing);
+      }
     } catch (error) {
       setBackendHealth({
         status: 'unreachable',
         lastChecked: new Date().toISOString(),
         message: error instanceof Error ? error.message : 'Failed to reach backend',
       });
+      setMissingPrerequisites([]);
     } finally {
       setIsChecking(false);
     }
-  }, [apiBase, setBackendHealth, updateBackendHealth]);
+  }, [apiBase, setBackendHealth, setMissingPrerequisites, updateBackendHealth]);
 
   useEffect(() => {
     let mounted = true;

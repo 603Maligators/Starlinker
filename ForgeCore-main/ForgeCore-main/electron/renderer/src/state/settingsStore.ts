@@ -4,6 +4,14 @@ import type { SettingsSchema, StarlinkerConfig, ValidationIssue } from '../types
 
 type SettingsStatus = 'idle' | 'loading' | 'ready' | 'saving' | 'error';
 
+export type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends Array<infer U>
+    ? Array<U>
+    : T[K] extends object
+    ? DeepPartial<T[K]>
+    : T[K];
+};
+
 type SettingsState = {
   config: StarlinkerConfig | null;
   defaults: StarlinkerConfig | null;
@@ -19,6 +27,7 @@ type SettingsState = {
   resetDraft: () => void;
   applyDefaultsToDraft: () => void;
   saveDraft: () => Promise<boolean>;
+  patchConfig: (patch: DeepPartial<StarlinkerConfig>) => Promise<boolean>;
 };
 
 function toValidationIssues(payload: unknown): ValidationIssue[] {
@@ -159,6 +168,58 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(payload),
+      });
+
+      const body = await response.json().catch(() => undefined);
+
+      if (response.status === 422) {
+        const detail =
+          body && typeof body === 'object' && 'detail' in body
+            ? (body as { detail: unknown }).detail
+            : body;
+        const validationIssues = toValidationIssues(detail);
+        set({
+          status: 'ready',
+          error: 'Validation failed. Please review the highlighted issues.',
+          validationIssues,
+        });
+        return false;
+      }
+
+      if (!response.ok) {
+        throw new Error(`Failed to save settings (HTTP ${response.status})`);
+      }
+
+      const updated = body as StarlinkerConfig;
+      const now = new Date().toISOString();
+      set({
+        config: updated,
+        draft: JSON.stringify(updated, null, 2),
+        status: 'ready',
+        validationIssues: [],
+        error: undefined,
+        lastSaved: now,
+      });
+      return true;
+    } catch (error) {
+      set({
+        status: 'ready',
+        error: error instanceof Error ? error.message : 'Unable to save settings',
+      });
+      return false;
+    }
+  },
+
+  patchConfig: async (patch) => {
+    const base = getApiBaseUrl();
+    set({ status: 'saving', error: undefined, validationIssues: [] });
+    try {
+      const response = await fetch(`${base}/settings`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(patch),
       });
 
       const body = await response.json().catch(() => undefined);

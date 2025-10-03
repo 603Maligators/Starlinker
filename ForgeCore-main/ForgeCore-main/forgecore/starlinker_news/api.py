@@ -22,6 +22,10 @@ class DigestRequest(BaseModel):
     type: str = Field(default="daily", description="Digest cadence to trigger")
 
 
+class SnoozeRequest(BaseModel):
+    minutes: int = Field(default=60, ge=5, le=720, description="Minutes to snooze alerts")
+
+
 def create_app(
     *,
     backend: Optional[StarlinkerBackend] = None,
@@ -52,6 +56,7 @@ def create_app(
             "storage": backend.database.health_snapshot(),
             "missing": backend.missing_prerequisites(config),
             "config": config.model_dump(),
+            "alerts": backend.alert_status(),
         }
 
     @app.get("/settings", response_model=StarlinkerConfig)
@@ -86,6 +91,10 @@ def create_app(
     @app.post("/run/digest")
     async def run_digest(request: DigestRequest) -> dict:
         return backend.scheduler.trigger_digest(request.type)
+
+    @app.post("/alerts/snooze")
+    async def snooze_alerts(request: SnoozeRequest) -> dict[str, object]:
+        return await backend.snooze_alerts(request.minutes)
 
     @app.get("/digest/preview")
     async def preview_digest(digest_type: str = Query("daily")) -> dict[str, object]:

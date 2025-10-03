@@ -38,6 +38,14 @@ class EmailPlaceholder(EmailSenderProtocol):
         self.sent.append({"to": to, "subject": subject, "body": body})
 
 
+def _iso(moment: Optional[datetime]) -> Optional[str]:
+    if moment is None:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).isoformat()
+
+
 class AlertsService:
     """Evaluate stored signals, dedupe and dispatch alerts."""
 
@@ -58,15 +66,24 @@ class AlertsService:
         self._window = timedelta(hours=window_hours)
         self._min_priority = min_priority
         self._lock = asyncio.Lock()
+        self._snoozed_until: Optional[datetime] = None
 
     async def run(self, config: StarlinkerConfig, *, triggered_at: datetime) -> dict[str, object]:
         async with self._lock:
             return await self._run_locked(config, triggered_at=triggered_at)
 
     async def _run_locked(self, config: StarlinkerConfig, *, triggered_at: datetime) -> dict[str, object]:
+        if self._snoozed_until and triggered_at >= self._snoozed_until:
+            self._snoozed_until = None
         candidates = self._collect_candidates(config, triggered_at=triggered_at)
         if not candidates:
             return {"alerts": 0, "suppressed": False}
+        if self._snoozed_until and triggered_at < self._snoozed_until:
+            return {
+                "alerts": 0,
+                "suppressed": True,
+                "snoozed_until": _iso(self._snoozed_until),
+            }
         if self._in_quiet_hours(config, triggered_at):
             return {"alerts": 0, "suppressed": True}
 
@@ -109,6 +126,15 @@ class AlertsService:
                     )
                     delivered_total += 1
         return {"alerts": delivered_total, "suppressed": False}
+
+    async def snooze(self, minutes: int) -> dict[str, object]:
+        async with self._lock:
+            now = self._clock()
+            self._snoozed_until = now + timedelta(minutes=minutes)
+            return {"snoozed_until": _iso(self._snoozed_until)}
+
+    def describe(self) -> dict[str, Optional[str]]:
+        return {"snoozed_until": _iso(self._snoozed_until)}
 
     # Candidate helpers -------------------------------------------------
 

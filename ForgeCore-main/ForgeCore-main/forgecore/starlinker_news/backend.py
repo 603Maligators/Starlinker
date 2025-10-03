@@ -78,6 +78,12 @@ class StarlinkerBackend:
         config = self.settings.load()
         return self.digest.preview(digest_type, config)
 
+    async def snooze_alerts(self, minutes: int) -> dict[str, object]:
+        return await self.alerts.snooze(minutes)
+
+    def alert_status(self) -> dict[str, Optional[str]]:
+        return self.alerts.describe()
+
     def create_app(self):  # pragma: no cover - thin wrapper
         from .api import create_app
 
