@@ -70,6 +70,18 @@ def test_settings_patch_rejects_invalid_values(tmp_path):
     assert backend.load_config().appearance.theme == "neutral"
 
 
+def test_settings_put_rejects_invalid_payload(tmp_path):
+    backend = StarlinkerBackend(tmp_path)
+    app = create_app(backend=backend)
+    with TestClient(app) as client:
+        current = client.get("/settings").json()
+        current["quiet_hours"] = ["23:00"]
+        response = client.put("/settings", json=current)
+
+    assert response.status_code == 422
+    assert backend.load_config().quiet_hours == ["23:00", "07:00"]
+
+
 def test_settings_defaults_and_schema(tmp_path):
     backend = StarlinkerBackend(tmp_path)
     app = create_app(backend=backend)

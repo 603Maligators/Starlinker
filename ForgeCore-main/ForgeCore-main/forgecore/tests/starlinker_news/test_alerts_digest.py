@@ -160,3 +160,30 @@ def test_digest_service_generates_markdown_and_records(tmp_path, config):
     assert len(client_factory.requests) == 1
     assert len(mailer.sent) == 1
 
+
+def test_digest_renderer_respects_timezone(tmp_path, config):
+    database = StarlinkerDatabase(tmp_path / "starlinker.db")
+    database.initialize()
+    cfg = config
+    cfg.timezone = "Pacific/Honolulu"
+    now = datetime(2024, 1, 1, 6, tzinfo=timezone.utc)
+    signal = NormalizedSignal(
+        source="rsi.patch_notes.live",
+        title="Morning Patch",
+        url="https://example.com/patch",
+        published_at=now - timedelta(hours=2),
+        fetched_at=now - timedelta(hours=1),
+        summary="Summary text",
+        priority=90,
+    )
+    database.store_signals([signal])
+
+    service = DigestService(database)
+    body, signals = service.generate_digest_body("daily", cfg, triggered_at=now)
+
+    assert signals[0].title == "Morning Patch"
+    assert body.startswith("# Starlinker Daily Digest (2023-12-31)")
+    assert "Morning Patch" in body
+    # Honolulu is UTC-10, so published timestamp should show previous day
+    assert "2023-12-31" in body
+
